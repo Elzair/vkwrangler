@@ -37,6 +37,8 @@
 (defvar ext-fmt-path load-file-name "Path to this file.")
 (defvar ext-fmt-excluded-funcs '(vkGetInstanceProcAddr vkGetDeviceProcAddr)
   "Functions to exclude from dynamic allocation.")
+(defvar ext-fmt-device-fn-params '(VkDevice VkQueue VkCommandBuffer)
+  "Parameters that signify a function returend by vkGetDeviceProcAddr().")
 
 ;; Helper Functions
 
@@ -144,7 +146,7 @@
 
 ;; Header File Functions
 
-(defun format-command (cmd)
+(defun format-header-command (cmd)
     "Format function declaration from CMD."
     (concat
      (symbol-name (nth 1 cmd))
@@ -160,28 +162,123 @@
               ", ")
      ");"))
 
-(defun format-commands (section &optional is-not-ext)
+(defun format-header-commands (section)
     "Format all commands in give SECTION.
 
 If IS-NOT-EXT is nil, guard declarations with #ifdefs."
-    (concat
-     (when (null is-not-ext)
-       (concat "#ifdef "
-               (symbol-name (nth 0 section))
+    (mapconcat #'format-header-command
+               (nth 1 section)
                "\n"))
-     (mapconcat #'format-command
-                (nth 1 section)
-                "\n")
-     (when (null is-not-ext)
-       "\n#endif")))
 
-(defun format-declarations (api)
+(defun format-header-declarations (api)
     "Create function declarations for all functions in API."
-    (concat (format-commands (nth 0 api) t)
+    (concat (format-header-commands (nth 0 api))
             "\n"
-            (mapconcat #'format-commands
+            (mapconcat #'format-header-commands
                        (nth 1 api)
                        "\n")))
+
+;; Source File Functions
+
+(defun filter-inst-or-dev-fns-helper (section devp)
+  "Filter instance functions or device functions from SECTION if DEVP is true or false."
+  (let ((name (nth 0 section))
+        (fns  (nth 1 section)))
+    (cl-flet ((filter-func (fn)
+                           (member (nth 0 (nth 0 (nth 2 fn)))
+                                   ext-fmt-device-fn-params)))
+      (list name
+            (if devp
+                (remove-if-not #'filter-func fns)
+              (remove-if #'filter-func fns))))))
+
+(defun filter-inst-or-dev-fns (api devp)
+    "Filter instance functions or device functions from API if DEVP is true or false."
+    (cl-flet ((helper-func (section)
+                           (filter-inst-or-dev-fns-helper section devp)))
+      (list (filter-inst-or-dev-fns-helper (nth 0 api) devp)
+            (mapcar #'helper-func
+                    (nth 1 api)))))
+
+(defun filter-param-names (api)
+  "Filter all parameter names (i.e. final item of param list) from API."
+  (cl-flet* ((filter-param-name (p)
+                                (reverse (cdr (reverse p))))
+             (filter-param-list (lst)
+                                (mapcar #'filter-param-name lst))
+             (filter-cmd (cmd)
+                         (list (nth 0 cmd)
+                               (nth 1 cmd)
+                               (funcall #'filter-param-list
+                                        (nth 2 cmd))))
+             (filter-section (section)
+                             (list (nth 0 section)
+                                   (mapcar #'filter-cmd
+                                           (nth 1 section)))))
+    (list (filter-section (nth 0 api))
+          (mapcar #'filter-section
+                  (nth 1 api)))))
+
+
+(defun format-source-command (cmd devp)
+  "Format function definitions from CMD.  Use vkGetInstanceProcAddr() or vkGetDeviceProcAddr() if DEVP is false or true."
+  (concat
+   (symbol-name (nth 0 cmd))
+   " = ("
+   (symbol-name (nth 1 cmd))
+   " (*"
+   ")("
+   (mapconcat #'(lambda (param)
+                  (mapconcat #'(lambda (elt)
+                                 (symbol-name elt))
+                             param
+                             " "))
+              (nth 2 cmd)
+              ", ")
+   "))"
+   (if devp
+       "vkGetDeviceProcAddr(device"
+     "vkGetInstanceProcAddr(instance")
+   ", \""
+   (symbol-name (nth 0 cmd))
+   "\");"))
+
+(defun format-source-commands (section extp devp)
+    "Format all commands in given SECTION.  If EXTP is not nil, guard declarations with #ifdefs.  Pass DEVP to `format-source-command'."
+    (cl-flet ((format-helper (cmd)
+                             (format-source-command cmd devp)))
+     (concat
+      (when extp
+        (concat "if (strcmp(ppEnabledExtensionNames[i], \""
+                (symbol-name (nth 0 section))
+                "\") == 0) {"
+                "\n"))
+      (mapconcat #'format-helper
+                 (nth 1 section)
+                 "\n")
+      (when extp
+        "\n}"))))
+
+(defun make-function-definition (api devp)
+  "Make function definition command from data in API.  If DEVP is true, make device funtions; otherwise, make instance functions."
+  (cl-flet ((mfd-helper (section)
+                        (format-source-commands section t devp)))
+    (let ((filt-api (filter-inst-or-dev-fns api devp)))
+      (concat "{"
+             "\n"
+             (format-source-commands (nth 0 filt-api) nil devp)
+             "\n"
+             "uint32_t i;"
+             "\n"
+             "for (i=0; i < enabledExtensionNameCount; i++) {"
+             "\n"
+             (mapconcat #'mfd-helper
+                        (nth 1 filt-api)
+                        "\n")
+             "\n"
+             "}"
+             "\n"
+             "}"))))
 
 ;; Main Commands
 
@@ -220,16 +317,16 @@ If IS-NOT-EXT is nil, guard declarations with #ifdefs."
           (concat parent-dir
                   "api.sxp"))
          (reg-conts (get-vulkan-registry))
-         (api-conts nil))
-    (setq api-conts (parse-info reg-conts))
+         (api-conts (parse-info reg-conts)))
     (save-excursion
       (find-file api-file)
+      (delete-region (point-min) (point-max))
       (insert (pp-to-string api-conts))
       (save-buffer)
       (kill-buffer))
     api-conts))
 
-(defun test-make-header-file (api-file header-file)
+(defun make-header-file (api-file header-file)
   "This function will create a C header from the data in API-FILE and write it to HEADER-FILE."
   (interactive "FAPI File: \nFHeader File: ")
   (let* ((header-header
@@ -248,8 +345,8 @@ If IS-NOT-EXT is nil, guard declarations with #ifdefs."
          (header-footer
           (mapconcat #'identity
                      '(""
-                       "void vkWranglerInitInstFns(VkInstance inst, const char* const* extensionNames);"
-                       "void vkWranglerInitDevFns(VkDevice dev, const char* const* extensionNames);"
+                       "void vkWranglerInitInstanceFunctions(VkInstance instance, uint32_t enabledExtensionNameCount, const char* const* ppEnabledExtensionNames);"
+                       "void vkWranglerInitDeviceFunctions(VkDevice device, uint32_t enabledExtensionNameCount, const char* const* ppEnabledExtensionNames);"
                        "#ifdef __cplusplus"
                        "}"
                        "#endif"
@@ -262,190 +359,50 @@ If IS-NOT-EXT is nil, guard declarations with #ifdefs."
          (api
           (car (read-from-string api-contents)))
          (decls
-          (format-declarations api))
-         (out
+          (format-header-declarations api))
+         (output
           (concat header-header
                   decls
                   header-footer)))
-    (find-file header-file)
-    (insert out)))
+    (save-excursion
+      (find-file header-file)
+      (delete-region (point-min) (point-max))
+      (insert output)
+      (save-buffer)
+      (kill-buffer))))
 
-;; (defun make-header-file-helper (ext)
-;;     "This function will insert the vulkan extension EXT into the header file."
-;;     (let ((ext-name (symbol-name (car ext)))
-;;           (ext-fns  (cddr ext))
-;;           (val      0)
-;;           (tmp-name ""))
-;;       (insert (concat "#ifdef " ext-name))
-;;       (newline)
-;;       (dolist (elt ext-fns val)
-;;         (setq tmp-name (symbol-name elt))
-;;         (insert (concat "PFN_" tmp-name " " tmp-name ";"))
-;;         (newline))
-;;       (insert "#endif")
-;;       (newline)))
-
-;; (defun make-header-file (api-file header-file)
-;;   "This function will create a C header from the data in API-FILE and write it to HEADER-FILE."
-;;   (interactive "FAPI File: \nFHeader File: ")
-;;   (let* ((header-header '("#ifndef __VKWRANGLER.H__"
-;;                           "#define __VKWRANGLER.H__"
-;;                           "#ifndef VK_NO_PROTOTYPES"
-;;                           "#define VK_NO_PROTOTYPES"
-;;                           "#endif"
-;;                           "#include <vulkan/vulkan.h>"
-;;                           "#ifdef __cplusplus"
-;;                           "extern \"C\" {"
-;;                           "#endif"))
-;;          (header-footer '("void vkWranglerInitInstFns(VkInstance inst, const char* const* extensionNames);"
-;;                           "void vkWranglerInitDevFns(VkDevice dev, const char* const* extensionNames);"
-;;                           "#ifdef __cplusplus"
-;;                           "}"
-;;                           "#endif"
-;;                           "#endif"))
-;;          (api-contents
-;;           (with-temp-buffer
-;;             (insert-file-contents api-file)
-;;             (buffer-string)))
-;;          (api
-;;           (car (read-from-string api-contents))))
-;;     (find-file header-file)
-;;     (let ((val 0)
-;;           (lst nil))
-;;       ; Insert header
-;;       (dolist (elt header-header val)
-;;         (insert elt)
-;;         (newline))
-;;       ; Insert core function definitions
-;;       (setq lst (cdr (assoc 'vulkan-instance-functions api)))
-;;       (dolist (elt lst val)
-;;         (let ((str (symbol-name elt)))
-;;           (insert (concat "PFN_" str " " str ";"))
-;;           (newline)))
-;;       (setq lst (cdr (assoc 'vulkan-device-functions api)))
-;;       (dolist (elt lst val)
-;;         (let ((str (symbol-name elt)))
-;;           (insert (concat "PFN_" str " " str ";"))
-;;           (newline)))
-;;       (setq lst (cdr (assoc 'vulkan-device-functions api)))
-;;       (dolist (elt lst val)
-;;         (let ((str (symbol-name elt)))
-;;           (insert (concat "PFN_" str " " str ";"))
-;;           (newline)))
-;;       ; Insert extension functions
-;;       (setq lst (cddr api))
-;;       (dolist (elt lst val)
-;;         (make-header-file-helper elt))
-;;       ; Insert footer
-;;       (dolist (elt header-footer val)
-;;         (insert elt)
-;;         (newline)))))
-
-(defun make-source-file (api-file src-file)
-  "This function will create a C source file from the data in API-FILE and write it to SRC-FILE."
-  (interactive "FAPI File: \nFSource File: ")
-  (let* ((source-header '("#include <vulkan/vulkan.h>"
-                          ))
-         (source-footer '())
+(defun make-source-file (api-file source-file header-file)
+  "This function will create a C source file from the data in API-FILE and write it to SOURCE-FILE.  Include specified HEADER-FILE."
+  (interactive "FAPI File: \nFSource File: \nFHeader File: ")
+  (let* ((source-header
+          (concat "#include \""
+                  header-file
+                  "\""
+                  "\n"))
          (api-contents
           (with-temp-buffer
             (insert-file-contents api-file)
             (buffer-string)))
          (api
-          (car (read-from-string api-contents))))
-    (find-file src-file)
-    (let ((val 0)
-          (lst nil))
-      ; Insert header
-      (dolist (elt source-header val)
-        (insert elt)
-        (newline))
-      ; Insert core function definitions
-      (setq lst (cdr (assoc 'vulkan-instance-functions api)))
-      (dolist (elt lst val)
-        (let ((str (symbol-name elt)))
-          (insert (concat "PFN_" str " " str ";"))
-          (newline)))
-      (setq lst (cdr (assoc 'vulkan-device-functions api)))
-      (dolist (elt lst val)
-        (let ((str (symbol-name elt)))
-          (insert (concat "PFN_" str " " str ";"))
-          (newline)))
-      (setq lst (cdr (assoc 'vulkan-device-functions api)))
-      (dolist (elt lst val)
-        (let ((str (symbol-name elt)))
-          (insert (concat "PFN_" str " " str ";"))
-          (newline)))
-      ; Insert extension functions
-      (setq lst (cddr api))
-      (dolist (elt lst val)
-        (make-header-file-helper elt))
-      ; Insert footer
-      (dolist (elt source-footer val)
-        (insert elt)
-        (newline)))))
-
-;; (defun format-line ()
-;;     ""
-;;   (interactive)
-;;   (let ((beg (line-beginning-position)))
-;;     (goto-char beg)
-;;     (search-forward "PFN_")
-;;     (let ((word-beg (point)))
-;;       (forward-word)
-;;       (let ((word-end (point)))
-;;         (let ((word (buffer-substring-no-properties word-beg word-end)))
-;;           (delete-region (line-beginning-position)
-;;                          (line-end-position))
-;;           (insert "PFN_")
-;;           (insert word)
-;;           (insert " ")
-;;           (insert word)
-;;           (insert ";")
-;;           (forward-line 1))))))
-
-;; (defun format-line-2 ()
-;;     ""
-;;   (interactive)
-;;   (let ((beg (line-beginning-position)))
-;;     (goto-char beg)
-;;     (search-forward "PFN_")
-;;     (let ((word-beg (point)))
-;;       (forward-word)
-;;       (let ((word-end (point)))
-;;         (let ((word (buffer-substring-no-properties word-beg word-end)))
-;;           (delete-region (line-beginning-position)
-;;                          (line-end-position))
-;;           (insert word)
-;;           (insert " = (PFN_")
-;;           (insert word)
-;;           (insert ")vkGetInstanceProcAddr(instance, \"")
-;;           (insert word)
-;;           (insert "\");")
-;;           (forward-line 1))))))
-
-
-
-;; (defun format-line-helper (count)
-;;     ""
-;;     (interactive "nNumber of times:")
-;;     (let ((total 0))
-;;       (dotimes (number count total)
-;;         (format-line))))
-
-;; (defun format-line-2-helper (count)
-;;     ""
-;;     (interactive "nNumber of times:")
-;;     (let ((total 0))
-;;       (dotimes (number count total)
-;;         (format-line-2))))
-
-;; (defun format-line-3-helper (count)
-;;     ""
-;;     (interactive "nNumber of times:")
-;;     (let ((total 0))
-;;       (dotimes (number count total)
-;;         (format-line-3))))
+          (filter-param-names (car (read-from-string api-contents))))
+         (inst-func
+          (concat "void vkWranglerInitInstanceFunctions(VkInstance instance, uint32_t enabledExtensionNameCount, const char* const* ppEnabledExtensionNames)"
+                  (make-function-definition api nil)))
+         (dev-func
+          (concat "void vkWranglerInitDeviceFunctions(VkDevice device, uint32_t enabledExtensionNameCount, const char* const* ppEnabledExtensionNames)"
+                  (make-function-definition api t)))
+         (output
+          (concat source-header
+                  inst-func
+                  "\n"
+                  dev-func
+                  )))
+    (save-excursion
+      (find-file source-file)
+      (delete-region (point-min) (point-max))
+      (insert output)
+      (save-buffer)
+      (kill-buffer))))
 
 (provide 'extension-formatter)
 ;;; extension-formatter.el ends here
