@@ -34,22 +34,22 @@
 
 ;; Global variables
 
-(defvar ext-fmt-path load-file-name "Path to this file.")
-(defvar ext-fmt-excluded-funcs '(vkGetInstanceProcAddr vkGetDeviceProcAddr)
+(defvar vk-wrangler-path load-file-name "Path to this file.")
+(defvar vk-wrangler-excluded-funcs '(vkGetInstanceProcAddr vkGetDeviceProcAddr)
   "Functions to exclude from dynamic allocation.")
-(defvar ext-fmt-device-fn-params '(VkDevice VkQueue VkCommandBuffer)
+(defvar vk-wrangler-device-fn-params '(VkDevice VkQueue VkCommandBuffer)
   "Parameters that signify a function returend by vkGetDeviceProcAddr().")
 
 ;; Helper Functions
 
-(defun chomp (str)
+(defun vk-wrangler-chomp (str)
   "Chomp leading and tailing whitespace from STR."
   (replace-regexp-in-string (rx (or (: bos (* (any " \t\n")))
                                     (: (* (any " \t\n")) eos)))
                             ""
                             str))
 
-(defun filter-children (lst name)
+(defun vk-wrangler-filter-children (lst name)
   "Return only sub-lists of list LST that have a first element matching NAME."
   (remove-if-not #'(lambda (x)
                      (and (listp x)
@@ -59,63 +59,63 @@
 
 ;; Command Parsing Functions
 
-(defun parse-param (param)
+(defun vk-wrangler-parse-param (param)
     "Parse function parameter PARAM."
   (mapcar #'(lambda (x)
               (cond ((and (listp x)
                           (not (null x)))
                      (intern (nth 2 x)))
                     ((stringp x)
-                     (intern (chomp x)))))
+                     (intern (vk-wrangler-chomp x)))))
           (nthcdr 2 param)))
 
-(defun parse-proto (proto)
+(defun vk-wrangler-parse-proto (proto)
     "Parse function prototype PROTO."
     (list (intern (nth 2 (assoc 'name (nthcdr 2 proto))))
           (intern (nth 2 (assoc 'type (nthcdr 2 proto))))))
 
-(defun parse-command (cmd)
+(defun vk-wrangler-parse-command (cmd)
     "Parse command CMD."
     (let* ((body (nthcdr 2 cmd))
-           (proto (parse-proto (assoc 'proto body))))
+           (proto (vk-wrangler-parse-proto (assoc 'proto body))))
       (list (nth 0 proto)
             (nth 1 proto)
-            (mapcar #'parse-param
-                    (filter-children body 'param)))))
+            (mapcar #'vk-wrangler-parse-param
+                    (vk-wrangler-filter-children body 'param)))))
 
-(defun parse-commands (reg)
+(defun vk-wrangler-parse-commands (reg)
     "Parse all commands in Vulkan Registry REG."
     (let ((cmds (assoc 'commands
                        (nthcdr 2 reg))))
       (remove-if #'(lambda (c)
                      (member (nth 0 c)
-                             ext-fmt-excluded-funcs))
-       (mapcar #'parse-command
-              (filter-children (nthcdr 2 cmds)
+                             vk-wrangler-excluded-funcs))
+       (mapcar #'vk-wrangler-parse-command
+              (vk-wrangler-filter-children (nthcdr 2 cmds)
                                'command)))))
 
 ;; Extension Functions
 
-(defun parse-ext-reqs (reqs)
+(defun vk-wrangler-parse-ext-reqs (reqs)
     "Parse functions required for extension REQS."
     (mapcar #'(lambda (x)
                 (intern (cdr (assoc 'name (cadr x)))))
-     (filter-children reqs 'command)))
+     (vk-wrangler-filter-children reqs 'command)))
 
-(defun parse-ext (ext)
+(defun vk-wrangler-parse-ext (ext)
     "Parse extension EXT."
     (list (intern (cdr (assoc 'name (nth 1 ext))))
-          (parse-ext-reqs (assoc 'require ext))))
+          (vk-wrangler-parse-ext-reqs (assoc 'require ext))))
 
-(defun parse-extensions (reg)
+(defun vk-wrangler-parse-extensions (reg)
     "Retrieve all extensions from Vulkan Registry REG."
-    (mapcar #'(lambda (x) (parse-ext x))
-            (filter-children (assoc 'extensions reg)
+    (mapcar #'(lambda (x) (vk-wrangler-parse-ext x))
+            (vk-wrangler-filter-children (assoc 'extensions reg)
                              'extension)))
 
 ;; Combination Functions
 
-(defun get-ext-cmds (cmds exts)
+(defun vk-wrangler-get-ext-cmds (cmds exts)
   "Get all commands from CMDS listed under all extensions EXTS."
   (mapcar #'(lambda (ext)
               (list (nth 0 ext)
@@ -124,7 +124,7 @@
                        (nth 1 ext))))
           exts))
 
-(defun get-core-cmds (cmds ext-cmds)
+(defun vk-wrangler-get-core-cmds (cmds ext-cmds)
   "Get all commands CMDS not listed under any extensions EXT-CMDS."
   (let ((ext-fns
          (mapcan #'(lambda (ext)
@@ -135,18 +135,18 @@
                          (member (nth 0 cmd) ext-fns))
                      cmds))))
 
-(defun parse-info (reg)
+(defun vk-wrangler-parse-info (reg)
     "Parse all information from Vulkan Registry REG."
-    (let* ((cmds    (parse-commands reg))
-           (exts    (parse-extensions reg))
-           (ext-cmds (get-ext-cmds cmds exts))
-           (core-cmds (get-core-cmds cmds ext-cmds)))
+    (let* ((cmds    (vk-wrangler-parse-commands reg))
+           (exts    (vk-wrangler-parse-extensions reg))
+           (ext-cmds (vk-wrangler-get-ext-cmds cmds exts))
+           (core-cmds (vk-wrangler-get-core-cmds cmds ext-cmds)))
       (list core-cmds
             ext-cmds)))
 
 ;; Header File Functions
 
-(defun format-header-command (cmd)
+(defun vk-wrangler-format-header-command (cmd)
     "Format function declaration from CMD."
     (concat
      (symbol-name (nth 1 cmd))
@@ -162,45 +162,45 @@
               ", ")
      ");"))
 
-(defun format-header-commands (section)
+(defun vk-wrangler-format-header-commands (section)
     "Format all commands in give SECTION.
 
 If IS-NOT-EXT is nil, guard declarations with #ifdefs."
-    (mapconcat #'format-header-command
+    (mapconcat #'vk-wrangler-format-header-command
                (nth 1 section)
                "\n"))
 
-(defun format-header-declarations (api)
+(defun vk-wrangler-format-header-declarations (api)
     "Create function declarations for all functions in API."
-    (concat (format-header-commands (nth 0 api))
+    (concat (vk-wrangler-format-header-commands (nth 0 api))
             "\n"
-            (mapconcat #'format-header-commands
+            (mapconcat #'vk-wrangler-format-header-commands
                        (nth 1 api)
                        "\n")))
 
 ;; Source File Functions
 
-(defun filter-inst-or-dev-fns-helper (section devp)
+(defun vk-wrangler-filter-inst-or-dev-fns-helper (section devp)
   "Filter instance functions or device functions from SECTION if DEVP is true or false."
   (let ((name (nth 0 section))
         (fns  (nth 1 section)))
     (cl-flet ((filter-func (fn)
                            (member (nth 0 (nth 0 (nth 2 fn)))
-                                   ext-fmt-device-fn-params)))
+                                   vk-wrangler-device-fn-params)))
       (list name
             (if devp
                 (remove-if-not #'filter-func fns)
               (remove-if #'filter-func fns))))))
 
-(defun filter-inst-or-dev-fns (api devp)
+(defun vk-wrangler-filter-inst-or-dev-fns (api devp)
     "Filter instance functions or device functions from API if DEVP is true or false."
     (cl-flet ((helper-func (section)
-                           (filter-inst-or-dev-fns-helper section devp)))
-      (list (filter-inst-or-dev-fns-helper (nth 0 api) devp)
+                           (vk-wrangler-filter-inst-or-dev-fns-helper section devp)))
+      (list (vk-wrangler-filter-inst-or-dev-fns-helper (nth 0 api) devp)
             (mapcar #'helper-func
                     (nth 1 api)))))
 
-(defun filter-param-names (api)
+(defun vk-wrangler-filter-param-names (api)
   "Filter all parameter names (i.e. final item of param list) from API."
   (cl-flet* ((filter-param-name (p)
                                 (reverse (cdr (reverse p))))
@@ -220,7 +220,7 @@ If IS-NOT-EXT is nil, guard declarations with #ifdefs."
                   (nth 1 api)))))
 
 
-(defun format-source-command (cmd devp)
+(defun vk-wrangler-format-source-command (cmd devp)
   "Format function definitions from CMD.  Use vkGetInstanceProcAddr() or vkGetDeviceProcAddr() if DEVP is false or true."
   (concat
    (symbol-name (nth 0 cmd))
@@ -243,10 +243,10 @@ If IS-NOT-EXT is nil, guard declarations with #ifdefs."
    (symbol-name (nth 0 cmd))
    "\");"))
 
-(defun format-source-commands (section extp devp)
+(defun vk-wrangler-format-source-commands (section extp devp)
     "Format all commands in given SECTION.  If EXTP is not nil, guard declarations with #ifdefs.  Pass DEVP to `format-source-command'."
     (cl-flet ((format-helper (cmd)
-                             (format-source-command cmd devp)))
+                             (vk-wrangler-format-source-command cmd devp)))
      (concat
       (when extp
         (concat "if (strcmp(ppEnabledExtensionNames[i], \""
@@ -259,14 +259,14 @@ If IS-NOT-EXT is nil, guard declarations with #ifdefs."
       (when extp
         "\n}"))))
 
-(defun make-function-definition (api devp)
+(defun vk-wrangler-make-function-definition (api devp)
   "Make function definition command from data in API.  If DEVP is true, make device funtions; otherwise, make instance functions."
   (cl-flet ((mfd-helper (section)
-                        (format-source-commands section t devp)))
-    (let ((filt-api (filter-inst-or-dev-fns api devp)))
+                        (vk-wrangler-format-source-commands section t devp)))
+    (let ((filt-api (vk-wrangler-filter-inst-or-dev-fns api devp)))
       (concat "{"
              "\n"
-             (format-source-commands (nth 0 filt-api) nil devp)
+             (vk-wrangler-format-source-commands (nth 0 filt-api) nil devp)
              "\n"
              "uint32_t i;"
              "\n"
@@ -282,11 +282,11 @@ If IS-NOT-EXT is nil, guard declarations with #ifdefs."
 
 ;; Main Commands
 
-(defun get-vulkan-registry ()
+(defun vk-wrangler-get-vulkan-registry ()
   "Retrieve the vulkan registry from the internet and save parsed version as OUTPUT-FILE."
   (interactive)
   (let* ((parent-dir
-          (file-name-as-directory (file-name-directory ext-fmt-path)))
+          (file-name-as-directory (file-name-directory vk-wrangler-path)))
          (xml-file
           (concat parent-dir
                   "vk.xml"))
@@ -308,16 +308,16 @@ If IS-NOT-EXT is nil, guard declarations with #ifdefs."
         (kill-buffer))
       contents)))
 
-(defun make-api-file ()
+(defun vk-wrangler-make-api-file ()
   "Create a file listing function information for all Vulkan extensions and save it to OUTPUT-FILE and read from INPUT-FILE."
   (interactive)
   (let* ((parent-dir
-          (file-name-as-directory (file-name-directory ext-fmt-path)))
+          (file-name-as-directory (file-name-directory vk-wrangler-path)))
          (api-file
           (concat parent-dir
                   "api.sxp"))
-         (reg-conts (get-vulkan-registry))
-         (api-conts (parse-info reg-conts)))
+         (reg-conts (vk-wrangler-get-vulkan-registry))
+         (api-conts (vk-wrangler-parse-info reg-conts)))
     (save-excursion
       (find-file api-file)
       (delete-region (point-min) (point-max))
@@ -326,7 +326,7 @@ If IS-NOT-EXT is nil, guard declarations with #ifdefs."
       (kill-buffer))
     api-conts))
 
-(defun make-header-file (api-file header-file)
+(defun vk-wrangler-make-header-file (api-file header-file)
   "This function will create a C header from the data in API-FILE and write it to HEADER-FILE."
   (interactive "FAPI File: \nFHeader File: ")
   (let* ((header-header
@@ -359,7 +359,7 @@ If IS-NOT-EXT is nil, guard declarations with #ifdefs."
          (api
           (car (read-from-string api-contents)))
          (decls
-          (format-header-declarations api))
+          (vk-wrangler-format-header-declarations api))
          (output
           (concat header-header
                   decls
@@ -371,7 +371,7 @@ If IS-NOT-EXT is nil, guard declarations with #ifdefs."
       (save-buffer)
       (kill-buffer))))
 
-(defun make-source-file (api-file source-file header-file)
+(defun vk-wrangler-make-source-file (api-file source-file header-file)
   "This function will create a C source file from the data in API-FILE and write it to SOURCE-FILE.  Include specified HEADER-FILE."
   (interactive "FAPI File: \nFSource File: \nFHeader File: ")
   (let* ((source-header
@@ -384,13 +384,13 @@ If IS-NOT-EXT is nil, guard declarations with #ifdefs."
             (insert-file-contents api-file)
             (buffer-string)))
          (api
-          (filter-param-names (car (read-from-string api-contents))))
+          (vk-wrangler-filter-param-names (car (read-from-string api-contents))))
          (inst-func
           (concat "void vkWranglerInitInstanceFunctions(VkInstance instance, uint32_t enabledExtensionNameCount, const char* const* ppEnabledExtensionNames)"
-                  (make-function-definition api nil)))
+                  (vk-wrangler-make-function-definition api nil)))
          (dev-func
           (concat "void vkWranglerInitDeviceFunctions(VkDevice device, uint32_t enabledExtensionNameCount, const char* const* ppEnabledExtensionNames)"
-                  (make-function-definition api t)))
+                  (vk-wrangler-make-function-definition api t)))
          (output
           (concat source-header
                   inst-func
