@@ -1,4 +1,4 @@
-;;; extension-formatter.el --- Helper functions to generate wrapper -*- lexical-binding: t -*-
+;;; vk-wrangler.el --- Helper functions to generate Vulkan wrapper -*- lexical-binding: t -*-
 
 ;; Copyright © 2016 Philip Woods
 
@@ -429,4 +429,4 @@
       (kill-buffer))))
 
 (provide 'extension-formatter)
-;;; extension-formatter.el ends here
+;;; vk-wrangler.el ends here
