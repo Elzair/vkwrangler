@@ -99,13 +99,17 @@
 (defun vk-wrangler-parse-ext-reqs (reqs)
     "Parse functions required for extension REQS."
     (mapcar #'(lambda (x)
-                (intern (cdr (assoc 'name (cadr x)))))
+                (intern (cdr (assoc 'name (nth 1 x)))))
      (vk-wrangler-filter-children reqs 'command)))
 
 (defun vk-wrangler-parse-ext (ext)
     "Parse extension EXT."
-    (list (intern (cdr (assoc 'name (nth 1 ext))))
-          (vk-wrangler-parse-ext-reqs (assoc 'require ext))))
+    (let* ((name (intern (cdr (assoc 'name    (nth 1 ext)))))
+          (prot1 (cdr (assoc 'protect (nth 1 ext))))
+          (prot  (if (null prot1) nil (intern prot1)))
+          (reqs1 (assoc 'require ext))
+          (reqs  (vk-wrangler-parse-ext-reqs reqs1)))
+      (list name prot reqs)))
 
 (defun vk-wrangler-parse-extensions (reg)
     "Retrieve all extensions from Vulkan Registry REG."
@@ -119,18 +123,20 @@
   "Get all commands from CMDS listed under all extensions EXTS."
   (mapcar #'(lambda (ext)
               (list (nth 0 ext)
+                    (nth 1 ext)
                     (mapcar #'(lambda (func)
                            (assoc func cmds))
-                       (nth 1 ext))))
+                       (nth 2 ext))))
           exts))
 
 (defun vk-wrangler-get-core-cmds (cmds ext-cmds)
   "Get all commands CMDS not listed under any extensions EXT-CMDS."
   (let ((ext-fns
          (mapcan #'(lambda (ext)
-                     (mapcar #'car (nth 1 ext)))
+                     (mapcar #'car (nth 2 ext)))
                  ext-cmds)))
     (list 'core
+          nil
           (remove-if #'(lambda (cmd)
                          (member (nth 0 cmd) ext-fns))
                      cmds))))
@@ -167,7 +173,7 @@
 
 If IS-NOT-EXT is nil, guard declarations with #ifdefs."
     (mapconcat #'vk-wrangler-format-header-command
-               (nth 1 section)
+               (nth 2 section)
                "\n"))
 
 (defun vk-wrangler-format-header-declarations (api)
@@ -183,11 +189,13 @@ If IS-NOT-EXT is nil, guard declarations with #ifdefs."
 (defun vk-wrangler-filter-inst-or-dev-fns-helper (section devp)
   "Filter instance functions or device functions from SECTION if DEVP is true or false."
   (let ((name (nth 0 section))
-        (fns  (nth 1 section)))
+        (prot (nth 1 section))
+        (fns  (nth 2 section)))
     (cl-flet ((filter-func (fn)
                            (member (nth 0 (nth 0 (nth 2 fn)))
                                    vk-wrangler-device-fn-params)))
       (list name
+            prot
             (if devp
                 (remove-if-not #'filter-func fns)
               (remove-if #'filter-func fns))))))
@@ -213,8 +221,9 @@ If IS-NOT-EXT is nil, guard declarations with #ifdefs."
                                         (nth 2 cmd))))
              (filter-section (section)
                              (list (nth 0 section)
+                                   (nth 1 section)
                                    (mapcar #'filter-cmd
-                                           (nth 1 section)))))
+                                           (nth 2 section)))))
     (list (filter-section (nth 0 api))
           (mapcar #'filter-section
                   (nth 1 api)))))
@@ -254,7 +263,7 @@ If IS-NOT-EXT is nil, guard declarations with #ifdefs."
                 "\") == 0) {"
                 "\n"))
       (mapconcat #'format-helper
-                 (nth 1 section)
+                 (nth 2 section)
                  "\n")
       (when extp
         "\n}"))))
