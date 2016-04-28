@@ -96,6 +96,13 @@
 
 ;; Extension Functions
 
+(defun vk-wrangler-filter-extensions (exts)
+    "Return only extensions from EXTS that are supported in vulkan."
+  (remove-if-not #'(lambda (ext)
+                     (string-equal (cdr (assoc 'supported (nth 1 ext)))
+                                   "vulkan"))
+                 exts))
+
 (defun vk-wrangler-parse-ext-reqs (reqs)
     "Parse functions required for extension REQS."
     (mapcar #'(lambda (x)
@@ -112,10 +119,11 @@
       (list name prot reqs)))
 
 (defun vk-wrangler-parse-extensions (reg)
-    "Retrieve all extensions from Vulkan Registry REG."
-    (mapcar #'(lambda (x) (vk-wrangler-parse-ext x))
-            (vk-wrangler-filter-children (assoc 'extensions reg)
-                             'extension)))
+  "Retrieve all extensions from Vulkan Registry REG."
+  (mapcar #'(lambda (x) (vk-wrangler-parse-ext x))
+          (vk-wrangler-filter-extensions
+           (vk-wrangler-filter-children (assoc 'extensions reg)
+                                        'extension))))
 
 ;; Combination Functions
 
