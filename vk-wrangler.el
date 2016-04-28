@@ -34,11 +34,17 @@
 
 ;; Global variables
 
-(defvar vk-wrangler-path load-file-name "Path to this file.")
-(defvar vk-wrangler-excluded-funcs '(vkGetInstanceProcAddr vkGetDeviceProcAddr)
+(defvar vk-wrangler-path
+  (file-name-as-directory (file-name-directory load-file-name)) "Path to this file.")
+(defvar vk-wrangler-excluded-funcs
+  '(vkGetInstanceProcAddr vkGetDeviceProcAddr)
   "Functions to exclude from dynamic allocation.")
-(defvar vk-wrangler-device-fn-params '(VkDevice VkQueue VkCommandBuffer)
+(defvar vk-wrangler-device-fn-params
+  '(VkDevice VkQueue VkCommandBuffer)
   "Parameters that signify a function returend by vkGetDeviceProcAddr().")
+(defvar vk-wrangler-default-xml-url
+  "https://raw.githubusercontent.com/KhronosGroup/Vulkan-Docs/1.0/src/spec/vk.xml"
+  "Default URL for XML specification.")
 
 ;; Helper Functions
 
@@ -56,6 +62,20 @@
                           (not (null x))
                           (eq (car x) name)))
                  lst))
+
+(defun vk-wrangler-trim-final-elt (lst)
+  "Trim final element from list LST."
+  (cl-labels ((trim-helper (prev next)
+                           (if (eq (car next)
+                                   '##)
+                               (reverse (cons '*
+                                              prev))
+                             (trim-helper (cons (car next)
+                                                prev)
+                                          (cdr next)))))
+    (if (member '## lst)
+        (trim-helper nil lst)
+      (reverse (cdr (reverse lst))))))
 
 ;; Command Parsing Functions
 
@@ -221,10 +241,8 @@
 
 (defun vk-wrangler-filter-param-names (api)
   "Filter all parameter names (i.e. final item of param list) from API."
-  (cl-flet* ((filter-param-name (p)
-                                (reverse (cdr (reverse p))))
-             (filter-param-list (lst)
-                                (mapcar #'filter-param-name lst))
+  (cl-flet* ((filter-param-list (lst)
+                                (mapcar #'vk-wrangler-trim-final-elt lst))
              (filter-cmd (cmd)
                          (list (nth 0 cmd)
                                (nth 1 cmd)
@@ -264,24 +282,26 @@
    "\");"))
 
 (defun vk-wrangler-format-source-commands (section extp devp)
-    "Format all commands in given SECTION.  If EXTP is not nil, guard declarations with #ifdefs.  Pass DEVP to `format-source-command'."
-    (cl-flet ((format-helper (cmd)
-                             (vk-wrangler-format-source-command cmd devp)))
-     (concat
-      (when extp
-        (concat (when (not (null (nth 1 section)))
-                  (concat "#ifdef " (symbol-name (nth 1 section)) "\n"))
-                "if (strcmp(ppEnabledExtensionNames[i], \""
-                (symbol-name (nth 0 section))
-                "\") == 0) {"
-                "\n"))
-      (mapconcat #'format-helper
-                 (nth 2 section)
-                 "\n")
-      (when extp
-        (concat "\n}"
-                (when (not (null (nth 1 section)))
-                  "\n#endif"))))))
+  "Format all commands in given SECTION.  If EXTP is not nil, guard declarations with #ifdefs.  Pass DEVP to `format-source-command'."
+  (cl-flet ((format-helper (cmd)
+                           (vk-wrangler-format-source-command cmd devp)))
+    (if (not (null (nth 2 section)))
+        (concat
+         (when extp
+           (concat (when (not (null (nth 1 section)))
+                     (concat "#ifdef " (symbol-name (nth 1 section)) "\n"))
+                   "if (strcmp(ppEnabledExtensionNames[i], \""
+                   (symbol-name (nth 0 section))
+                   "\") == 0) {"
+                   "\n"))
+         (mapconcat #'format-helper
+                    (nth 2 section)
+                    "\n")
+         (when extp
+           (concat "\n}"
+                   (when (not (null (nth 1 section)))
+                     "\n#endif"))))
+      "")))
 
 (defun vk-wrangler-make-function-definition (api devp)
   "Make function definition command from data in API.  If DEVP is true, make device funtions; otherwise, make instance functions."
@@ -306,18 +326,24 @@
 
 ;; Main Commands
 
-(defun vk-wrangler-get-vulkan-registry ()
-  "Retrieve the vulkan registry from the internet and save parsed version as OUTPUT-FILE."
+(defun vk-wrangler-get-vulkan-registry (&optional xml-url)
+  "Retrieve the vulkan registry from the internet and save parsed version.
+
+XML-URL is an alternative URL for the vulkan registry."
   (interactive)
-  (let* ((parent-dir
-          (file-name-as-directory (file-name-directory vk-wrangler-path)))
+  (let* ((my-url (if (null xml-url)
+                   vk-wrangler-default-xml-url
+                   xml-url))
+         (spec-dir
+          (file-name-as-directory (concat vk-wrangler-path
+                                          "spec")))
          (xml-file
-          (concat parent-dir
+          (concat spec-dir
                   "vk.xml"))
          (sxp-file
-          (concat parent-dir
+          (concat spec-dir
                   "vk.sxp")))
-    (url-copy-file "https://raw.githubusercontent.com/KhronosGroup/Vulkan-Docs/1.0/src/spec/vk.xml"
+    (url-copy-file my-url
                    xml-file
                    t)
     (let ((contents nil))
@@ -329,104 +355,119 @@
         (delete-region (point-min) (point-max))
         (insert (pp-to-string contents))
         (save-buffer)
-        (kill-buffer))
-      contents)))
+        (kill-buffer)))))
 
 (defun vk-wrangler-make-api-file ()
   "Create a file listing function information for all Vulkan extensions and save it to OUTPUT-FILE and read from INPUT-FILE."
   (interactive)
-  (let* ((parent-dir
-          (file-name-as-directory (file-name-directory vk-wrangler-path)))
+  (let* ((spec-dir
+          (file-name-as-directory (concat vk-wrangler-path
+                                          "spec")))
          (api-file
-          (concat parent-dir
+          (concat spec-dir
                   "api.sxp"))
-         (reg-conts (vk-wrangler-get-vulkan-registry))
+         (sxp-file
+          (concat spec-dir
+                  "vk.sxp"))
+         (reg-conts (car (read-from-string (with-temp-buffer
+                                             (insert-file-contents sxp-file)
+                                             (buffer-string)))))
          (api-conts (vk-wrangler-parse-info reg-conts)))
     (save-excursion
       (find-file api-file)
       (delete-region (point-min) (point-max))
       (insert (pp-to-string api-conts))
       (save-buffer)
-      (kill-buffer))
-    api-conts))
-
-(defun vk-wrangler-make-header-file (api-file header-file)
-  "This function will create a C header from the data in API-FILE and write it to HEADER-FILE."
-  (interactive "FAPI File: \nFHeader File: ")
-  (let* ((header-header
-          (mapconcat #'identity
-                     '("#ifndef __VKWRANGLER.H__"
-                       "#define __VKWRANGLER.H__"
-                       "#ifndef VK_NO_PROTOTYPES"
-                       "#define VK_NO_PROTOTYPES"
-                       "#endif"
-                       "#include <vulkan/vulkan.h>"
-                       "#ifdef __cplusplus"
-                       "extern \"C\" {"
-                       "#endif"
-                       "")
-                     "\n"))
-         (header-footer
-          (mapconcat #'identity
-                     '(""
-                       "void vkWranglerInitInstanceFunctions(VkInstance instance, uint32_t enabledExtensionNameCount, const char* const* ppEnabledExtensionNames);"
-                       "void vkWranglerInitDeviceFunctions(VkDevice device, uint32_t enabledExtensionNameCount, const char* const* ppEnabledExtensionNames);"
-                       "#ifdef __cplusplus"
-                       "}"
-                       "#endif"
-                       "#endif")
-                     "\n"))
-         (api-contents
-          (with-temp-buffer
-            (insert-file-contents api-file)
-            (buffer-string)))
-         (api
-          (car (read-from-string api-contents)))
-         (decls
-          (vk-wrangler-format-header-declarations api))
-         (output
-          (concat header-header
-                  decls
-                  header-footer)))
-    (save-excursion
-      (find-file header-file)
-      (delete-region (point-min) (point-max))
-      (insert output)
-      (save-buffer)
       (kill-buffer))))
 
-(defun vk-wrangler-make-source-file (api-file source-file header-file)
+(defun vk-wrangler-make-header-file ()
+  "This function will create a C header from the data in spec/api.sxp and write it to include/vkwrangler/vkwrangler.h."
+  (interactive)
+  (let ((api-file
+         (concat vk-wrangler-path
+                 "spec/api.sxp"))
+        (header-file (concat vk-wrangler-path
+                             "include/vkwrangler/vkwrangler.h"))
+        (header-header
+         (mapconcat #'identity
+                    '("#ifndef __VKWRANGLER.H__"
+                      "#define __VKWRANGLER.H__"
+                      "#ifndef VK_NO_PROTOTYPES"
+                      "#define VK_NO_PROTOTYPES"
+                      "#endif"
+                      "#include <vulkan/vulkan.h>"
+                      "#ifdef __cplusplus"
+                      "extern \"C\" {"
+                      "#endif"
+                      "")
+                    "\n"))
+        (header-footer
+         (mapconcat #'identity
+                    '(""
+                      "void vkWranglerInitInstanceFunctions(VkInstance instance, uint32_t enabledExtensionNameCount, const char* const* ppEnabledExtensionNames);"
+                      "void vkWranglerInitDeviceFunctions(VkDevice device, uint32_t enabledExtensionNameCount, const char* const* ppEnabledExtensionNames);"
+                      "#ifdef __cplusplus"
+                      "}"
+                      "#endif"
+                      "#endif")
+                    "\n")))
+    (make-directory (file-name-directory header-file) t)
+    (let* ((api-contents
+            (with-temp-buffer
+              (insert-file-contents api-file)
+              (buffer-string)))
+           (api
+            (car (read-from-string api-contents)))
+           (decls
+            (vk-wrangler-format-header-declarations api))
+           (output
+            (concat header-header
+                    decls
+                    header-footer)))
+      (save-excursion
+        (find-file header-file)
+        (delete-region (point-min) (point-max))
+        (insert output)
+        (indent-region (point-min) (point-max))
+        (save-buffer)
+        (kill-buffer)))))
+
+(defun vk-wrangler-make-source-file ()
   "This function will create a C source file from the data in API-FILE and write it to SOURCE-FILE.  Include specified HEADER-FILE."
-  (interactive "FAPI File: \nFSource File: \nFHeader File: ")
-  (let* ((source-header
-          (concat "#include \""
-                  header-file
-                  "\""
-                  "\n"))
-         (api-contents
-          (with-temp-buffer
-            (insert-file-contents api-file)
-            (buffer-string)))
-         (api
-          (vk-wrangler-filter-param-names (car (read-from-string api-contents))))
-         (inst-func
-          (concat "void vkWranglerInitInstanceFunctions(VkInstance instance, uint32_t enabledExtensionNameCount, const char* const* ppEnabledExtensionNames)"
-                  (vk-wrangler-make-function-definition api nil)))
-         (dev-func
-          (concat "void vkWranglerInitDeviceFunctions(VkDevice device, uint32_t enabledExtensionNameCount, const char* const* ppEnabledExtensionNames)"
-                  (vk-wrangler-make-function-definition api t)))
-         (output
-          (concat source-header
-                  inst-func
-                  "\n"
-                  dev-func
-                  )))
-    (save-excursion
-      (find-file source-file)
-      (delete-region (point-min) (point-max))
-      (insert output)
-      (save-buffer)
-      (kill-buffer))))
+  (interactive)
+  (let* ((api-file
+          (concat vk-wrangler-path
+                  "spec/api.sxp"))
+         (source-file
+          (concat vk-wrangler-path
+                  "src/vkwrangler.c"))
+         (source-header
+          "#include <vkwrangler.vkwrangler.h\n"))
+    (make-directory (file-name-directory source-file) t)
+    (let* ((api-contents
+            (with-temp-buffer
+              (insert-file-contents api-file)
+              (buffer-string)))
+           (api
+            (vk-wrangler-filter-param-names (car (read-from-string api-contents))))
+           (inst-func
+            (concat "void vkWranglerInitInstanceFunctions(VkInstance instance, uint32_t enabledExtensionNameCount, const char* const* ppEnabledExtensionNames) "
+                    (vk-wrangler-make-function-definition api nil)))
+           (dev-func
+            (concat "void vkWranglerInitDeviceFunctions(VkDevice device, uint32_t enabledExtensionNameCount, const char* const* ppEnabledExtensionNames) "
+                    (vk-wrangler-make-function-definition api t)))
+           (output
+            (concat source-header
+                    inst-func
+                    "\n\n"
+                    dev-func)))
+      (save-excursion
+        (find-file source-file)
+        (delete-region (point-min) (point-max))
+        (insert output)
+        (indent-region (point-min) (point-max))
+        (save-buffer)
+        (kill-buffer)))))
 
 (provide 'extension-formatter)
 ;;; vk-wrangler.el ends here
