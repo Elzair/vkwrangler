@@ -273,7 +273,7 @@
                              " "))
               (nth 2 cmd)
               ", ")
-   "))"
+   "))(uintptr_t)"
    (if devp
        "vkGetDeviceProcAddr(device"
      "vkGetInstanceProcAddr(instance")
@@ -395,6 +395,7 @@ XML-URL is an alternative URL for the vulkan registry."
                       "#ifndef VK_NO_PROTOTYPES"
                       "#define VK_NO_PROTOTYPES"
                       "#endif"
+                      "#include <string.h>"
                       "#include <vulkan/vulkan.h>"
                       "#ifdef __cplusplus"
                       "extern \"C\" {"
@@ -442,7 +443,12 @@ XML-URL is an alternative URL for the vulkan registry."
           (concat vk-wrangler-path
                   "src/vkwrangler.c"))
          (source-header
-          "#include <vkwrangler/vkwrangler.h>\n"))
+          (mapconcat #'identity
+                     '("#include <vkwrangler/vkwrangler.h>"
+                       "extern PFN_vkVoidFunction vkGetInstanceProcAddr(VkInstance instance, const char* pName);"
+                       "extern PFN_vkVoidFunction vkGetDeviceProcAddr(VkDevice device, const char* pName);"
+                       "\n")
+                     "\n")))
     (make-directory (file-name-directory source-file) t)
     (let* ((api-contents
             (with-temp-buffer
