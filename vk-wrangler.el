@@ -390,8 +390,8 @@ XML-URL is an alternative URL for the vulkan registry."
                              "include/vkwrangler/vkwrangler.h"))
         (header-header
          (mapconcat #'identity
-                    '("#ifndef __VKWRANGLER.H__"
-                      "#define __VKWRANGLER.H__"
+                    '("#ifndef __VKWRANGLER_H__"
+                      "#define __VKWRANGLER_H__"
                       "#ifndef VK_NO_PROTOTYPES"
                       "#define VK_NO_PROTOTYPES"
                       "#endif"
@@ -442,7 +442,7 @@ XML-URL is an alternative URL for the vulkan registry."
           (concat vk-wrangler-path
                   "src/vkwrangler.c"))
          (source-header
-          "#include <vkwrangler.vkwrangler.h\n"))
+          "#include <vkwrangler/vkwrangler.h>\n"))
     (make-directory (file-name-directory source-file) t)
     (let* ((api-contents
             (with-temp-buffer
@@ -468,6 +468,12 @@ XML-URL is an alternative URL for the vulkan registry."
         (indent-region (point-min) (point-max))
         (save-buffer)
         (kill-buffer)))))
+
+(defun vk-wrangler-make ()
+    "Make all C code files for vk-wrangler."
+    (interactive)
+    (vk-wrangler-make-header-file)
+    (vk-wrangler-make-source-file))
 
 (provide 'extension-formatter)
 ;;; vk-wrangler.el ends here
