@@ -169,12 +169,15 @@
      ");"))
 
 (defun vk-wrangler-format-header-commands (section)
-    "Format all commands in give SECTION.
-
-If IS-NOT-EXT is nil, guard declarations with #ifdefs."
-    (mapconcat #'vk-wrangler-format-header-command
-               (nth 2 section)
-               "\n"))
+    "Format all commands in give SECTION."
+    (concat
+     (when (not (null (nth 1 section)))
+       (concat "#ifdef " (symbol-name (nth 1 section)) "\n"))
+     (mapconcat #'vk-wrangler-format-header-command
+                (nth 2 section)
+                "\n")
+     (when (not (null (nth 1 section)))
+       "\n#endif")))
 
 (defun vk-wrangler-format-header-declarations (api)
     "Create function declarations for all functions in API."
@@ -258,7 +261,9 @@ If IS-NOT-EXT is nil, guard declarations with #ifdefs."
                              (vk-wrangler-format-source-command cmd devp)))
      (concat
       (when extp
-        (concat "if (strcmp(ppEnabledExtensionNames[i], \""
+        (concat (when (not (null (nth 1 section)))
+                  (concat "#ifdef " (symbol-name (nth 1 section)) "\n"))
+                "if (strcmp(ppEnabledExtensionNames[i], \""
                 (symbol-name (nth 0 section))
                 "\") == 0) {"
                 "\n"))
@@ -266,7 +271,9 @@ If IS-NOT-EXT is nil, guard declarations with #ifdefs."
                  (nth 2 section)
                  "\n")
       (when extp
-        "\n}"))))
+        (concat "\n}"
+                (when (not (null (nth 1 section)))
+                  "\n#endif"))))))
 
 (defun vk-wrangler-make-function-definition (api devp)
   "Make function definition command from data in API.  If DEVP is true, make device funtions; otherwise, make instance functions."
